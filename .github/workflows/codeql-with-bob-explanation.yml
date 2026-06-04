@@ -20,7 +20,7 @@
 # - Permissions: security-events, pull-requests write
 #
 # USAGE:
-# Runs automatically on PRs and push to main
+# Runs automatically on PRs and push to main, plus weekly schedule
 #
 # ============================================================================
 
@@ -32,225 +32,117 @@ on:
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 0 * * 0'  # Weekly on Sunday
+    - cron: '0 0 * * 0'
 
 jobs:
-  analyze-and-explain:
-    name: CodeQL Analysis + Bob Explanation
+  analyze:
+    name: Analyze with CodeQL and Bob
     runs-on: ubuntu-latest
-    
     permissions:
       actions: read
       contents: read
       security-events: write
       pull-requests: write
-    
-    strategy:
-      fail-fast: false
-      matrix:
-        language: [ 'python', 'javascript' ]
-    
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
-      
+        uses: actions/checkout@v4
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
-          languages: ${{ matrix.language }}
-      
+          languages: javascript, python
+
       - name: Autobuild
         uses: github/codeql-action/autobuild@v3
-      
+
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
         with:
-          category: "/language:${{ matrix.language }}"
-      
-      - name: Setup Node.js for Bob Shell
-        if: github.event_name == 'pull_request'
-        uses: actions/setup-node@v6
+          category: "/language:javascript,python"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '22'
-      
+
       - name: Install Bob Shell
-        if: github.event_name == 'pull_request'
         run: |
-          echo "Installing Bob Shell..."
           curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash -s -- --package-manager npm
-          
           if command -v bob &> /dev/null; then
-            echo "✓ Bob Shell installed successfully"
+            echo "Bob Shell installed"
             bob --version
           else
-            echo "✗ Bob Shell installation failed"
+            echo "Bob Shell installation failed"
             exit 1
           fi
-      
-      - name: Get CodeQL Alerts
-        if: github.event_name == 'pull_request'
-        id: get_alerts
+
+      - name: Authenticate Bob Shell
+        env:
+          BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
+        run: |
+          bob auth login --api-key "$BOBSHELL_API_KEY"
+
+      - name: Fetch CodeQL Alerts
+        id: fetch_alerts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "Fetching CodeQL alerts..."
-          
-          # Get alerts for this repository
-          gh api \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "/repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100" \
+          curl -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/code-scanning/alerts" \
             > /tmp/codeql-alerts.json
           
-          # Count alerts
-          ALERT_COUNT=$(jq '. | length' /tmp/codeql-alerts.json)
+          ALERT_COUNT=$(jq length /tmp/codeql-alerts.json)
+          echo "Found ${ALERT_COUNT} alerts"
           echo "alert_count=${ALERT_COUNT}" >> $GITHUB_OUTPUT
-          
-          echo "Found ${ALERT_COUNT} CodeQL alerts"
-      
-      - name: Bob Explains CodeQL Findings
-        if: github.event_name == 'pull_request' && steps.get_alerts.outputs.alert_count != '0'
-        env:
-          BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
+
+      - name: Create Bob Prompt
+        if: steps.fetch_alerts.outputs.alert_count > 0
         run: |
-          echo "Using Bob Shell to explain CodeQL findings..."
-          
-          # Read alerts
-          ALERTS=$(cat /tmp/codeql-alerts.json)
-          
-          # Create prompt for Bob using heredoc
-          cat > /tmp/bob_prompt.txt <<'EOF'
-You are a security expert explaining CodeQL findings to developers.
-
-## CodeQL Security Findings
-
-The following security vulnerabilities were detected by CodeQL:
-
-EOF
-          
-          # Append alerts
+          echo "You are a security expert explaining CodeQL findings to developers." > /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "## CodeQL Security Findings" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "The following security vulnerabilities were detected:" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
           echo '```json' >> /tmp/bob_prompt.txt
           cat /tmp/codeql-alerts.json >> /tmp/bob_prompt.txt
           echo '```' >> /tmp/bob_prompt.txt
-          
-          # Append rest of prompt
-          cat >> /tmp/bob_prompt.txt <<'EOF'
+          echo "" >> /tmp/bob_prompt.txt
+          echo "## Your Task" >> /tmp/bob_prompt.txt
+          echo "" >> /tmp/bob_prompt.txt
+          echo "For each finding, provide:" >> /tmp/bob_prompt.txt
+          echo "1. Vulnerability Name" >> /tmp/bob_prompt.txt
+          echo "2. Severity Level" >> /tmp/bob_prompt.txt
+          echo "3. Simple explanation" >> /tmp/bob_prompt.txt
+          echo "4. Why it's dangerous" >> /tmp/bob_prompt.txt
+          echo "5. How to fix it" >> /tmp/bob_prompt.txt
+          echo "6. Code example" >> /tmp/bob_prompt.txt
 
-## Your Task
-
-For each finding, provide:
-
-1. **Vulnerability Name**: Clear, simple name
-2. **Severity**: Critical/High/Medium/Low
-3. **What it means**: Explain in simple terms (2-3 sentences)
-4. **Why it's dangerous**: Real-world impact
-5. **How to fix**: Specific code changes needed
-6. **Example**: Show vulnerable code vs secure code
-
-## Output Format
-
-Use this markdown structure:
-### Critical Findings
-
-
-#### [Vulnerability Name]
-- **File**: path/to/file.ext:line
-- **Severity**: Critical
-- **Explanation**: [Simple explanation]
-- **Risk**: [Why it's dangerous]
-- **Fix**: [How to fix it]
-- **Example**:
-```language
-// Vulnerable
-[bad code]
-
-// Secure
-[good code]
-```
-
----
-
-Repeat for all findings, grouped by severity.
-
-At the end, provide:
-
-### Summary
-- Total findings: X
-- Critical: X
-- High: X
-- Medium: X
-- Low: X
-
-### Priority Actions
-1. [Most urgent fix]
-2. [Second priority]
-3. [Third priority]
-EOF
-
-          # Run Bob Shell
-          cat /tmp/bob_prompt.txt | bob --accept-license > /tmp/codeql-explanation.md
-          
-          echo "✓ Bob Shell explanation generated"
-      
-      - name: Post Explanation to PR
-        if: github.event_name == 'pull_request' && steps.get_alerts.outputs.alert_count != '0'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Get Bob Explanation
+        if: steps.fetch_alerts.outputs.alert_count > 0
+        id: bob_explain
         run: |
-          echo "Posting CodeQL explanation to PR..."
-          
-          # Read explanation
-          EXPLANATION=$(cat /tmp/codeql-explanation.md)
-          
-          # Create comment
-          COMMENT="## CodeQL Security Analysis
+          echo "Getting Bob explanation..."
+          bob ask "$(cat /tmp/bob_prompt.txt)" > /tmp/bob_explanation.md
+          echo "Explanation generated"
 
-**Language**: ${{ matrix.language }}
-**Findings**: ${{ steps.get_alerts.outputs.alert_count }}
-
----
-
-${EXPLANATION}
-
----
-
-<details>
-<summary>ℹ️ About this analysis</summary>
-
-This security analysis combines:
-- **CodeQL**: GitHub's semantic code analysis engine
-- **Bob Shell**: AI-powered explanation and recommendations
-
-CodeQL detected the vulnerabilities, Bob Shell explained them in simple terms and provided fix recommendations.
-
-To see raw CodeQL results, check the [Security tab](https://github.com/${{ github.repository }}/security/code-scanning).
-</details>"
-
-          # Post comment
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body "${COMMENT}"
-          
-          echo "✓ Explanation posted to PR"
-      
-      - name: No Findings Message
-        if: github.event_name == 'pull_request' && steps.get_alerts.outputs.alert_count == '0'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body "## ✅ CodeQL Security Analysis
-
-**Language**: ${{ matrix.language }}
-**Result**: No security vulnerabilities detected
-
-CodeQL analysis completed successfully with no findings."
-      
-      - name: Upload Explanation Artifact
-        if: github.event_name == 'pull_request' && steps.get_alerts.outputs.alert_count != '0'
-        uses: actions/upload-artifact@v7
+      - name: Post Explanation
+        if: steps.fetch_alerts.outputs.alert_count > 0 && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
         with:
-          name: codeql-explanation-${{ matrix.language }}
-          path: /tmp/codeql-explanation.md
-          retention-days: 30
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const explanation = fs.readFileSync('/tmp/bob_explanation.md', 'utf8');
+            
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `## CodeQL Security Analysis\n\n${explanation}`
+            });
 
 # Made with Bob
