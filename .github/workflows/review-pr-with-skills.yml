@@ -1,0 +1,351 @@
+# ============================================================================
+# GitHub Workflow: Review PR with Custom Skills
+# ============================================================================
+#
+# PURPOSE:
+# This workflow reviews pull requests using IBM Bob Shell with custom skills
+# from the ./skills directory. It analyzes code for:
+# - SOLID principles violations
+# - Security vulnerabilities
+# - Architecture pattern issues
+# - Code quality problems
+#
+# WORKFLOW STEPS:
+# 1. Trigger: Activated when PR is opened/updated with 'review-with-bob' label
+# 2. Checkout: Get PR code and skills directory
+# 3. Install Bob Shell: Setup Bob Shell CLI
+# 4. Load Skills: Read all .md files from ./skills directory
+# 5. Get PR Diff: Extract changes from the PR
+# 6. Bob Review: Run Bob with skills as context
+# 7. Post Results: Comment on PR with findings
+#
+# REQUIREMENTS:
+# - GitHub Secrets:
+#   * BOBSHELL_API_KEY: API key for Bob Shell
+#   * GITHUB_TOKEN: Automatically provided by GitHub
+# - Label: 'review-with-bob' must exist in repository
+# - Skills: ./skills directory with .md rule files
+#
+# USAGE:
+# Add 'review-with-bob' label to any PR to trigger automatic review
+#
+# ============================================================================
+
+name: Review PR with Custom Skills
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled]
+
+jobs:
+  review-pr-with-skills:
+    # Only run when PR has the review-with-bob label
+    if: contains(github.event.pull_request.labels.*.name, 'review-with-bob')
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0  # Full history for better diff context
+      
+      - name: Checkout base branch for comparison
+        run: |
+          git fetch origin ${{ github.event.pull_request.base.ref }}
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      
+      - name: Install Bob Shell
+        run: |
+          echo "Installing Bob Shell..."
+          curl -fsSL https://bob.ibm.com/download/bobshell.sh | bash -s -- --package-manager npm
+          
+          if command -v bob &> /dev/null; then
+            echo "✓ Bob Shell installed successfully"
+            bob --version
+          else
+            echo "✗ Bob Shell installation failed"
+            exit 1
+          fi
+      
+      - name: Authenticate Bob Shell
+        env:
+          BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
+        run: |
+          if [ -z "$BOBSHELL_API_KEY" ]; then
+            echo "Error: BOBSHELL_API_KEY secret is not set"
+            exit 1
+          fi
+          echo "Bob Shell authentication configured"
+      
+      - name: Load Custom Skills
+        id: load_skills
+        run: |
+          echo "Loading custom review skills from .bob/skills/ directory..."
+          
+          if [ ! -d ".bob/skills" ]; then
+            echo "Warning: .bob/skills/ directory not found"
+            echo "skills_content=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Combine all skill files into one context (official Bob structure)
+          SKILLS_CONTENT=""
+          SKILL_COUNT=0
+          
+          for skill_dir in .bob/skills/*/; do
+            if [ -d "$skill_dir" ]; then
+              skill_file="${skill_dir}SKILL.md"
+              if [ -f "$skill_file" ]; then
+                skill_name=$(basename "$skill_dir")
+                echo "Loading: $skill_name"
+                SKILLS_CONTENT="${SKILLS_CONTENT}\n\n# $skill_name\n\n"
+                SKILLS_CONTENT="${SKILLS_CONTENT}$(cat $skill_file)"
+                SKILL_COUNT=$((SKILL_COUNT + 1))
+              fi
+            fi
+          done
+          
+          echo "Loaded ${SKILL_COUNT} skill files"
+          
+          # Save to file for use in next step
+          echo "${SKILLS_CONTENT}" > /tmp/skills_context.md
+          echo "skills_count=${SKILL_COUNT}" >> $GITHUB_OUTPUT
+      
+      - name: Get PR Diff
+        id: pr_diff
+        run: |
+          echo "Generating PR diff..."
+          
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          
+          # Get the diff
+          git diff ${BASE_SHA}...${HEAD_SHA} > /tmp/pr_diff.txt
+          
+          # Get changed files list
+          CHANGED_FILES=$(git diff --name-only ${BASE_SHA}...${HEAD_SHA} | tr '\n' ', ' | sed 's/,$//')
+          echo "changed_files=${CHANGED_FILES}" >> $GITHUB_OUTPUT
+          
+          # Get diff stats
+          DIFF_STATS=$(git diff --stat ${BASE_SHA}...${HEAD_SHA})
+          echo "diff_stats<<EOF" >> $GITHUB_OUTPUT
+          echo "${DIFF_STATS}" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          echo "✓ PR diff generated"
+          echo "Changed files: ${CHANGED_FILES}"
+      
+      - name: Create Review Prompt
+        run: |
+          cat > /tmp/review_prompt.md <<'PROMPT_EOF'
+# Code Review Request
+
+You are an expert code reviewer analyzing a Pull Request using custom review rules.
+
+## Pull Request Information
+
+- **Repository**: ${{ github.repository }}
+- **PR Number**: #${{ github.event.pull_request.number }}
+- **Title**: ${{ github.event.pull_request.title }}
+- **Author**: @${{ github.event.pull_request.user.login }}
+- **Base Branch**: ${{ github.event.pull_request.base.ref }}
+- **Head Branch**: ${{ github.event.pull_request.head.ref }}
+
+## Changed Files
+
+${{ steps.pr_diff.outputs.changed_files }}
+
+## Diff Statistics
+
+```
+${{ steps.pr_diff.outputs.diff_stats }}
+```
+
+## Review Rules
+
+Apply the following custom review rules to analyze the code changes:
+
+PROMPT_EOF
+          
+          # Append skills content
+          if [ -f /tmp/skills_context.md ]; then
+            cat /tmp/skills_context.md >> /tmp/review_prompt.md
+          fi
+          
+          # Append PR diff
+          cat >> /tmp/review_prompt.md <<'DIFF_EOF'
+
+## Code Changes to Review
+
+```diff
+DIFF_EOF
+          
+          cat /tmp/pr_diff.txt >> /tmp/review_prompt.md
+          
+          cat >> /tmp/review_prompt.md <<'END_EOF'
+```
+
+## Review Instructions
+
+1. Analyze ALL code changes in the diff above
+2. Apply ALL review rules from the custom skills
+3. Identify violations by severity: Critical, High, Medium, Low
+4. For each finding, provide:
+   - **File and Line**: Exact location
+   - **Rule Violated**: Which rule from skills
+   - **Severity**: Critical/High/Medium/Low
+   - **Issue**: Clear description of the problem
+   - **Recommendation**: Specific fix suggestion
+   - **Example**: Show correct code if applicable
+
+5. Provide a summary with:
+   - Total findings by severity
+   - Overall code quality score (1-10)
+   - Top 3 priority fixes
+   - Recommendation: Approve, Request Changes, or Comment
+
+## Output Format
+
+Use this markdown structure:
+### Review Summary
+
+
+- **Overall Score**: X/10
+- **Critical Issues**: X
+- **High Priority**: X
+- **Medium Priority**: X
+- **Low Priority**: X
+- **Recommendation**: [Approve | Request Changes | Comment]
+### Critical Issues
+
+
+[List critical issues here]
+### High Priority Issues
+
+
+[List high priority issues here]
+### Medium Priority Issues
+
+
+[List medium priority issues here]
+### Low Priority Issues
+
+
+[List low priority issues here]
+
+### ✅ Positive Findings
+
+[List good practices found in the code]
+### Top 3 Priority Fixes
+
+
+1. [Most important fix]
+2. [Second most important]
+3. [Third most important]
+
+---
+
+**Note**: This review was generated automatically using custom skills. Please review findings and apply judgment.
+END_EOF
+          
+          echo "✓ Review prompt created"
+          echo "Prompt size: $(wc -c < /tmp/review_prompt.md) bytes"
+      
+      - name: Run Bob Shell Review
+        id: bob_review
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 15
+          max_attempts: 3
+          retry_wait_seconds: 10
+          command: |
+            echo "Running Bob Shell code review..."
+            
+            # Run Bob with the review prompt
+            cat /tmp/review_prompt.md | bob --accept-license > /tmp/bob_review.md
+            
+            echo "✓ Bob Shell review completed"
+            
+            # Check if review was generated
+            if [ ! -s /tmp/bob_review.md ]; then
+              echo "Error: Bob Shell did not generate a review"
+              exit 1
+            fi
+            
+            echo "Review size: $(wc -c < /tmp/bob_review.md) bytes"
+        env:
+          BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
+      
+      - name: Post Review Comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Posting review to PR #${{ github.event.pull_request.number }}..."
+          
+          # Read the review
+          REVIEW_CONTENT=$(cat /tmp/bob_review.md)
+          
+          # Create comment body
+          COMMENT_BODY="## Bob Shell Code Review
+
+**Skills Applied**: ${{ steps.load_skills.outputs.skills_count }} custom review rules
+**Changed Files**: ${{ steps.pr_diff.outputs.changed_files }}
+
+---
+
+${REVIEW_CONTENT}
+
+---
+
+<details>
+<summary>ℹ️ About this review</summary>
+
+This automated review was generated by Bob Shell using custom skills from the \`./skills\` directory:
+- SOLID Principles
+- Security Vulnerabilities
+- Architecture Patterns
+- Code Quality
+
+To update review rules, modify files in the \`./skills\` directory.
+</details>"
+          
+          # Post comment using GitHub CLI
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "${COMMENT_BODY}"
+          
+          echo "✓ Review posted successfully"
+      
+      - name: Upload Review Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: bob-review-pr-${{ github.event.pull_request.number }}
+          path: /tmp/bob_review.md
+          retention-days: 30
+      
+      - name: Handle Errors
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --body "❌ **Bob Shell Review Failed**
+            
+An error occurred while reviewing this PR. Please check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+
+Common issues:
+- BOBSHELL_API_KEY not configured
+- Skills directory missing or invalid
+- PR diff too large
+- Network connectivity issues"
+
+# Made with Bob
