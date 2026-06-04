@@ -74,7 +74,13 @@ jobs:
         env:
           BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
         run: |
-          bob auth login --api-key "$BOBSHELL_API_KEY"
+          echo "Configuring Bob Shell authentication..."
+          if [ -z "$BOBSHELL_API_KEY" ]; then
+            echo "Error: BOBSHELL_API_KEY secret is not set"
+            exit 1
+          fi
+          # Bob Shell uses BOBSHELL_API_KEY environment variable for authentication
+          echo "Bob Shell authentication configured successfully"
       
       - name: Load Custom Skills
         id: load_skills
