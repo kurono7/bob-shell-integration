@@ -164,7 +164,7 @@ jobs:
           BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
         run: |
           echo "Running Bob Shell review..."
-          bob --accept-license "$(cat /tmp/review_prompt.md)" > /tmp/bob_review.md 2>&1
+          bob --accept-license < /tmp/review_prompt.md > /tmp/bob_review.md 2>&1
           echo "Review complete ($(wc -l < /tmp/bob_review.md) lines)"
 
       - name: Upload Review as Artifact

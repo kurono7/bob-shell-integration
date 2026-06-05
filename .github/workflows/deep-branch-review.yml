@@ -200,7 +200,7 @@ jobs:
             echo "  Prompt size: ${PROMPT_SIZE} bytes"
             echo "  Running Bob review..."
 
-            bob --accept-license "$(cat ${PROMPT_FILE})" > /tmp/reviews/review_${BATCH_NUM}.md 2>&1 < /dev/null
+            bob --accept-license < "${PROMPT_FILE}" > /tmp/reviews/review_${BATCH_NUM}.md 2>&1
             BOB_EXIT=$?
 
             REVIEW_SIZE=$(wc -c < /tmp/reviews/review_${BATCH_NUM}.md 2>/dev/null || echo 0)
@@ -272,19 +272,28 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const fs = require('fs');
-            let report = fs.readFileSync('/tmp/final_report.md', 'utf8');
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-            const MAX_LENGTH = 65000;
-            if (report.length > MAX_LENGTH) {
-              report = report.substring(0, MAX_LENGTH) + '\n\n---\n> Report truncated. Download the full report from the workflow artifact.';
-            }
+            const summary = `## Deep Branch Review Summary
+
+            **Branch:** ${context.payload.inputs.branch}
+            **Files Analyzed:** ${{ steps.analyze.outputs.batch_count }}
+            **Skills Applied:** ${{ steps.load_skills.outputs.skill_count }}
+
+            The deep review completed successfully.
+
+            The full review report has been uploaded as a workflow artifact.
+
+            **[Download Full Report Here](${runUrl}#artifacts)**
+
+            You can also view the full report in the **[Workflow Run Summary](${runUrl})**.
+            `;
 
             const issue = await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: `Deep Code Review: ${context.payload.inputs.branch} branch - ${new Date().toISOString().split('T')[0]}`,
-              body: report,
+              body: summary,
               labels: ['code-review', 'bob-shell', 'deep-review']
             });
 

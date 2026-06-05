@@ -126,7 +126,7 @@ jobs:
           BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
         run: |
           echo "Getting Bob explanation..."
-          bob --accept-license "$(cat /tmp/bob_prompt.txt)" > /tmp/bob_explanation.md 2>&1
+          bob --accept-license < /tmp/bob_prompt.txt > /tmp/bob_explanation.md 2>&1
           echo "Explanation generated ($(wc -l < /tmp/bob_explanation.md) lines)"
 
       - name: Write Explanation to Step Summary
