@@ -110,22 +110,35 @@ jobs:
         id: collect_files
         run: |
           echo "Collecting source files..."
+          echo "Raw file pattern: '${{ github.event.inputs.file_pattern }}'"
+          echo "Working directory: $(pwd)"
+          echo "Directory contents (top level):"
+          ls -la
 
           IFS=',' read -ra PATTERNS <<< "${{ github.event.inputs.file_pattern }}"
+          echo "Parsed ${#PATTERNS[@]} pattern(s): ${PATTERNS[*]}"
 
-          FILES=""
           FILE_COUNT=0
+          > /tmp/files_to_review.txt
+
           for pattern in "${PATTERNS[@]}"; do
+            # find -name does not support ** globs — strip any leading path prefix (e.g. **/ or src/)
+            BASENAME_PATTERN=$(echo "${pattern}" | sed 's|.*/||')
+            echo "  Pattern: '${pattern}' -> basename filter: '${BASENAME_PATTERN}'"
+
             while IFS= read -r file; do
               if [ -f "$file" ]; then
-                FILES="${FILES}${file}\n"
+                echo "    Found: $file"
+                echo "$file" >> /tmp/files_to_review.txt
                 FILE_COUNT=$((FILE_COUNT + 1))
               fi
-            done < <(find . -path "./.git" -prune -o -type f -name "${pattern}" -print)
+            done < <(find . -path "./.git" -prune -o -path "./node_modules" -prune -o -type f -name "${BASENAME_PATTERN}" -print 2>/dev/null)
           done
 
-          echo "Found ${FILE_COUNT} files to review"
-          printf '%b' "${FILES}" > /tmp/files_to_review.txt
+          echo ""
+          echo "Total files found: ${FILE_COUNT}"
+          echo "Files list (/tmp/files_to_review.txt):"
+          cat /tmp/files_to_review.txt || echo "(empty)"
           echo "file_count=${FILE_COUNT}" >> $GITHUB_OUTPUT
 
       - name: Analyze Files in Batches
@@ -134,17 +147,31 @@ jobs:
           BOBSHELL_API_KEY: ${{ secrets.BOBSHELL_API_KEY }}
         run: |
           echo "Analyzing files in batches..."
+          echo "Files to process:"
+          cat /tmp/files_to_review.txt || echo "(no files found)"
+          echo ""
 
           BATCH_NUM=0
           mkdir -p /tmp/reviews
 
           while IFS= read -r file; do
+            # Skip empty lines
             if [ -z "$file" ]; then
               continue
             fi
 
             BATCH_NUM=$((BATCH_NUM + 1))
-            echo "Analyzing batch ${BATCH_NUM}: ${file}"
+            echo "--- Batch ${BATCH_NUM}: ${file} ---"
+
+            # Verify file still exists
+            if [ ! -f "$file" ]; then
+              echo "  WARNING: File not found, skipping: $file"
+              continue
+            fi
+
+            FILE_LINES=$(wc -l < "$file" 2>/dev/null || echo 0)
+            FILE_SIZE=$(wc -c < "$file" 2>/dev/null || echo 0)
+            echo "  File size: ${FILE_SIZE} bytes, ${FILE_LINES} lines"
 
             PROMPT_FILE="/tmp/review_prompt_${BATCH_NUM}.md"
 
@@ -169,9 +196,21 @@ jobs:
               echo "For each issue found, specify: severity (CRITICAL/HIGH/MEDIUM/LOW), location (line number if possible), and recommended fix."
             } > "${PROMPT_FILE}"
 
-            bob --accept-license "$(cat ${PROMPT_FILE})" > /tmp/reviews/review_${BATCH_NUM}.md 2>&1 || {
-              echo "Warning: Bob analysis for ${file} failed or timed out" > /tmp/reviews/review_${BATCH_NUM}.md
-            }
+            PROMPT_SIZE=$(wc -c < "${PROMPT_FILE}")
+            echo "  Prompt size: ${PROMPT_SIZE} bytes"
+            echo "  Running Bob review..."
+
+            bob --accept-license "$(cat ${PROMPT_FILE})" > /tmp/reviews/review_${BATCH_NUM}.md 2>&1
+            BOB_EXIT=$?
+
+            REVIEW_SIZE=$(wc -c < /tmp/reviews/review_${BATCH_NUM}.md 2>/dev/null || echo 0)
+            if [ $BOB_EXIT -eq 0 ]; then
+              echo "  Bob review complete: ${REVIEW_SIZE} bytes output"
+            else
+              echo "  WARNING: Bob exited with code ${BOB_EXIT} for ${file}"
+              echo "  Bob output preview:"
+              head -5 /tmp/reviews/review_${BATCH_NUM}.md || true
+            fi
 
             if [ $BATCH_NUM -ge 20 ]; then
               echo "Reached batch limit (20 files)"
@@ -179,7 +218,8 @@ jobs:
             fi
           done < /tmp/files_to_review.txt
 
-          echo "Analyzed ${BATCH_NUM} files"
+          echo ""
+          echo "Analysis complete. Processed ${BATCH_NUM} file(s)."
           echo "batch_count=${BATCH_NUM}" >> $GITHUB_OUTPUT
 
       - name: Generate Comprehensive Report
