@@ -23,11 +23,11 @@
 #
 # REQUIRED SECRETS:
 # - BOBSHELL_API_KEY: Bob Shell API key
-# - SKILLBERRY_BOT_TOKEN: token with permission to comment on PRs
+# - GH_PAT: token with permission to comment on PRs
 #
 # OPTIONAL REPOSITORY VARIABLE:
 # - BOB_ALLOWED_HEAD_OWNERS: comma-separated list of trusted GitHub org/user
-#   owners. Default: `${{ github.repository_owner }},skillberry-bot`
+#   owners. Default: `${{ github.repository_owner }}` (your account only)
 #
 # LABELS:
 # - test-with-bob: Triggers the workflow for testing PRs
@@ -86,7 +86,7 @@ jobs:
           TEST_WITH_BOB_LABEL: test-with-bob
           BOB_ALLOWED_HEAD_OWNERS: ${{ vars.BOB_ALLOWED_HEAD_OWNERS }}
         with:
-          github-token: ${{ secrets.SKILLBERRY_BOT_TOKEN }}
+          github-token: ${{ secrets.GH_PAT }}
           script: |
             const fs = require('fs');
             const os = require('os');
@@ -156,7 +156,7 @@ jobs:
               return;
             }
 
-            const defaultAllowedOwners = `${context.repo.owner},skillberry-bot`;
+            const defaultAllowedOwners = `${context.repo.owner}`;
             const allowedOwners = (process.env.BOB_ALLOWED_HEAD_OWNERS || defaultAllowedOwners)
               .split(',')
               .map(owner => owner.trim())
@@ -207,7 +207,7 @@ jobs:
           repository: ${{ steps.pr.outputs.head_repo }}
           ref: ${{ steps.pr.outputs.head_sha }}
           fetch-depth: 0
-          token: ${{ secrets.SKILLBERRY_BOT_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
           persist-credentials: false
 
       - name: Fetch base branch and collect diff
@@ -1228,7 +1228,7 @@ jobs:
       - name: Comment report on PR
         if: steps.pr.outputs.should_run == 'true' && always()
         env:
-          GITHUB_TOKEN: ${{ secrets.SKILLBERRY_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
           PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
           REPORT_FILE: ${{ steps.report.outputs.report_file }}
           ARTIFACT_URL: ${{ steps.upload_artifacts.outputs.artifact-url }}
