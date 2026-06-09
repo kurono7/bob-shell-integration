@@ -388,7 +388,7 @@ jobs:
       - name: Comment on PR
         if: steps.suggest_labels.outputs.suggested_labels != ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           PR_NUMBER="${{ steps.get_pr.outputs.pr_number }}"
           SUGGESTED_LABELS="${{ steps.suggest_labels.outputs.suggested_labels }}"
@@ -412,7 +412,7 @@ jobs:
       - name: Comment on PR - No Labels
         if: steps.suggest_labels.outputs.suggested_labels == ''
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           PR_NUMBER="${{ steps.get_pr.outputs.pr_number }}"
           
@@ -428,7 +428,7 @@ jobs:
       - name: Handle Errors
         if: failure()
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           PR_NUMBER="${{ steps.get_pr.outputs.pr_number }}"
           
