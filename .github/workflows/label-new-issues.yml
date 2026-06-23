@@ -296,7 +296,7 @@ jobs:
       
       - name: Apply Labels to Issue
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           LABELS_JSON=$(cat /tmp/selected_labels.json)
           

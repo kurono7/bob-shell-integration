@@ -74,7 +74,7 @@ jobs:
         with:
           ref: dev
           fetch-depth: 0  # Full history for better context
-          token: ${{ secrets.GH_PAT }}
+          token: ${{ secrets.GITHUB_TOKEN }}
       
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -242,7 +242,7 @@ jobs:
       - name: Commit and Push Changes
         if: steps.changes.outputs.has_changes == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git add -A
           git reset .bob/ || true
@@ -262,7 +262,7 @@ jobs:
       - name: Create Pull Request
         if: steps.changes.outputs.has_changes == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Get the diff stats first
           DIFF_STATS=$(git diff origin/main...HEAD --stat || echo "Unable to generate diff stats")
@@ -303,7 +303,7 @@ jobs:
       - name: Comment on Issue
         if: steps.changes.outputs.has_changes == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh issue comment ${{ steps.issue.outputs.issue_number }} \
             --body "Bob Shell has analyzed this issue and created a pull request with a proposed fix. Please review the changes."
@@ -311,7 +311,7 @@ jobs:
       - name: Comment on Issue - No Changes
         if: steps.changes.outputs.has_changes == 'false'
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh issue comment ${{ steps.issue.outputs.issue_number }} \
             --body "Bob Shell analyzed this issue but did not generate any code changes. Manual intervention may be required."
@@ -319,7 +319,7 @@ jobs:
       - name: Handle Errors
         if: failure()
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh issue comment ${{ steps.issue.outputs.issue_number }} \
             --body "❌ Bob Shell encountered an error while trying to fix this issue. Please check the workflow logs for details."
